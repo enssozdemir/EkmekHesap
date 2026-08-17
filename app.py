@@ -2,11 +2,12 @@ import streamlit as st
 import sqlite3
 from datetime import datetime
 
-# --- Veritabanı Kurulumu ---
+# --- Veritabanı Kurulumu ve Şema Güncelleme ---
 def init_db():
     conn = sqlite3.connect('ekmek_hesap.db')
     c = conn.cursor()
-    # Kasa Tablosu
+    
+    # 1. Kasa Tablosu
     c.execute('''
         CREATE TABLE IF NOT EXISTS islemler (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18,7 +19,16 @@ def init_db():
             aciklama TEXT
         )
     ''')
-    # Sipariş & Üretim Tablosu
+    
+    # Eski veritabanı ile uyumluluk için eksik sütunları güvenle ekle
+    c.execute("PRAGMA table_info(islemler)")
+    mevcut_sutunlar = [kolon[1] for kolon in c.fetchall()]
+    if 'odeme_yontemi' not in mevcut_sutunlar:
+        c.execute("ALTER TABLE islemler ADD COLUMN odeme_yontemi TEXT DEFAULT 'Nakit'")
+    if 'aciklama' not in mevcut_sutunlar:
+        c.execute("ALTER TABLE islemler ADD COLUMN aciklama TEXT DEFAULT ''")
+
+    # 2. Sipariş & Üretim Tablosu
     c.execute('''
         CREATE TABLE IF NOT EXISTS siparisler (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,6 +41,7 @@ def init_db():
             teslim_tarihi TEXT
         )
     ''')
+    
     conn.commit()
     conn.close()
 
@@ -59,7 +70,7 @@ def siparis_teslim_et(s_id, musteri, adet, ekmek_turu, tutar):
     # Kasaya Gelir Olarak Ekle
     c.execute('''
         INSERT INTO islemler (tur, kategori, tutar, odeme_yontemi, tarih, aciklama)
-        VALUES ('GELIR', 'Ekmek Satışı', ?, 'Nakit / Havale', ?, ?)
+        VALUES ('GELİR', 'Ekmek Satışı', ?, 'Nakit / Havale', ?, ?)
     ''', (tutar, simdi_gun, f"{musteri} - {adet} Adet {ekmek_turu}"))
     
     conn.commit()
@@ -241,10 +252,11 @@ elif menu == "💰 Kasa Defteri":
             with c1:
                 baslik = islem[6] if islem[6] else islem[2]
                 st.markdown(f"**{baslik}**")
-                st.caption(f"{islem[2]} • {islem[4]} • {islem[5]}")
+                aciklama_detay = f"{islem[2]} • {islem[4]} • {islem[5]}" if islem[4] else f"{islem[2]} • {islem[5]}"
+                st.caption(aciklama_detay)
             with c2:
-                renk = "green" if "GEL" in islem[1] else "red"
-                isaret = "+" if "GEL" in islem[1] else "-"
+                renk = "green" if "GEL" in str(islem[1]).upper() else "red"
+                isaret = "+" if "GEL" in str(islem[1]).upper() else "-"
                 st.markdown(f":{renk}[**{isaret}{islem[3]:,.2f} ₺**]")
             with c3:
                 if st.button("🗑️", key=f"sil_kasa_{islem[0]}"):
