@@ -40,10 +40,35 @@ init_db()
 def get_db():
     return sqlite3.connect('ekmek_hesap.db')
 
+def siparis_durum_guncelle(siparis_id, yeni_durum):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("UPDATE siparisler SET durum = ? WHERE id = ?", (yeni_durum, siparis_id))
+    conn.commit()
+    conn.close()
+
+def siparis_teslim_et(s_id, musteri, adet, ekmek_turu, tutar):
+    conn = get_db()
+    c = conn.cursor()
+    simdi_zaman = datetime.now().strftime("%Y-%m-%d %H:%M")
+    simdi_gun = datetime.now().strftime("%Y-%m-%d")
+    
+    # Siparişi Teslim Edildi yap
+    c.execute("UPDATE siparisler SET durum = 'TeslimEdildi', teslim_tarihi = ? WHERE id = ?", (simdi_zaman, s_id))
+    
+    # Kasaya Gelir Olarak Ekle
+    c.execute('''
+        INSERT INTO islemler (tur, kategori, tutar, odeme_yontemi, tarih, aciklama)
+        VALUES ('GELIR', 'Ekmek Satışı', ?, 'Nakit / Havale', ?, ?)
+    ''', (tutar, simdi_gun, f"{musteri} - {adet} Adet {ekmek_turu}"))
+    
+    conn.commit()
+    conn.close()
+
 # --- Sayfa Yapılandırması ---
 st.set_page_config(page_title="Ekmek Kasa & Sipariş Takip", layout="wide")
 
-# Sol Menü (Navigasyon)
+# Sol Menü
 menu = st.sidebar.radio(
     "📌 Menü",
     ["🥖 Sipariş & Üretim Takibi", "📦 Sipariş Geçmişi & Arşiv", "💰 Kasa Defteri"]
@@ -81,16 +106,23 @@ if menu == "🥖 Sipariş & Üretim Takibi":
                 else:
                     st.error("Lütfen müşteri adı girin.")
 
-    # Sipariş Süreç Kolonları
-    col_siparis, col_islem, col_elde = st.columns(3)
+    # Verileri Çek
     conn = get_db()
     c = conn.cursor()
+    c.execute("SELECT id, musteri, ekmek_turu, adet, tutar FROM siparisler WHERE durum = 'Siparis'")
+    siparisler = c.fetchall()
+    c.execute("SELECT id, musteri, ekmek_turu, adet, tutar FROM siparisler WHERE durum = 'IslemeAlindi'")
+    islemler = c.fetchall()
+    c.execute("SELECT id, musteri, ekmek_turu, adet, tutar FROM siparisler WHERE durum = 'EldekiEkmek'")
+    eldeler = c.fetchall()
+    conn.close()
+
+    # Sipariş Süreç Kolonları
+    col_siparis, col_islem, col_elde = st.columns(3)
 
     # 1. Kolon: Yeni Siparişler
     with col_siparis:
         st.subheader("📥 1. Sipariş Alındı")
-        c.execute("SELECT id, musteri, ekmek_turu, adet, tutar FROM siparisler WHERE durum = 'Siparis'")
-        siparisler = c.fetchall()
         if not siparisler:
             st.caption("Bekleyen sipariş yok.")
         for s in siparisler:
@@ -98,15 +130,12 @@ if menu == "🥖 Sipariş & Üretim Takibi":
                 st.markdown(f"**{s[1]}**")
                 st.caption(f"{s[3]} Adet • {s[2]} • **{s[4]:.2f} ₺**")
                 if st.button("Hazırlığa Al ➡️", key=f"islem_{s[0]}", use_container_width=True):
-                    c.execute("UPDATE siparisler SET durum = 'IslemeAlindi' WHERE id = ?", (s[0],))
-                    conn.commit()
+                    siparis_durum_guncelle(s[0], 'IslemeAlindi')
                     st.rerun()
 
     # 2. Kolon: İşleme Alınan / Fırında
     with col_islem:
         st.subheader("🔥 2. İşleme Alındı")
-        c.execute("SELECT id, musteri, ekmek_turu, adet, tutar FROM siparisler WHERE durum = 'IslemeAlindi'")
-        islemler = c.fetchall()
         if not islemler:
             st.caption("Hazırlıkta ürün yok.")
         for s in islemler:
@@ -114,15 +143,12 @@ if menu == "🥖 Sipariş & Üretim Takibi":
                 st.markdown(f"**{s[1]}**")
                 st.caption(f"{s[3]} Adet • {s[2]} • **{s[4]:.2f} ₺**")
                 if st.button("Pişti / Hazır ➡️", key=f"hazir_{s[0]}", use_container_width=True):
-                    c.execute("UPDATE siparisler SET durum = 'EldekiEkmek' WHERE id = ?", (s[0],))
-                    conn.commit()
+                    siparis_durum_guncelle(s[0], 'EldekiEkmek')
                     st.rerun()
 
     # 3. Kolon: Pişti / Eldeki Ekmek (Teslim Bekleyen)
     with col_elde:
         st.subheader("🍞 3. Eldeki Ekmek")
-        c.execute("SELECT id, musteri, ekmek_turu, adet, tutar FROM siparisler WHERE durum = 'EldekiEkmek'")
-        eldeler = c.fetchall()
         if not eldeler:
             st.caption("Rafta bekleyen ekmek yok.")
         for s in eldeler:
@@ -130,17 +156,8 @@ if menu == "🥖 Sipariş & Üretim Takibi":
                 st.markdown(f"**{s[1]}**")
                 st.caption(f"{s[3]} Adet • {s[2]} • **{s[4]:.2f} ₺**")
                 if st.button("✅ Teslim Edildi", key=f"teslim_{s[0]}", use_container_width=True):
-                    simdi = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    # Durumu TeslimEdildi yap
-                    c.execute("UPDATE siparisler SET durum = 'TeslimEdildi', teslim_tarihi = ? WHERE id = ?", (simdi, s[0]))
-                    # Otomatik Kasa Defterine Gelir Olarak Ekle
-                    c.execute('''
-                        INSERT INTO islemler (tur, kategori, tutar, odeme_yontemi, tarih, aciklama)
-                        VALUES ('GELIR', 'Ekmek Satışı', ?, 'Nakit / Havale', ?, ?)
-                    ''', (s[4], datetime.now().strftime("%Y-%m-%d"), f"{s[1]} - {s[3]} Adet {s[2]}"))
-                    conn.commit()
+                    siparis_teslim_et(s[0], s[1], s[3], s[2], s[4])
                     st.rerun()
-    conn.close()
 
 # ==========================================
 # 2. SAYFA: SİPARİŞ GEÇMİŞİ & ARŞİV
@@ -204,8 +221,8 @@ elif menu == "💰 Kasa Defteri":
     c.execute("SELECT tur, tutar FROM islemler")
     tum_islemler = c.fetchall()
     
-    gelir = sum([i[1] for i in tum_islemler if i[0] == 'GELIR' or i[0] == 'GELİR'])
-    gider = sum([i[1] for i in tum_islemler if i[0] == 'GIDER' or i[0] == 'GİDER'])
+    gelir = sum([i[1] for i in tum_islemler if i[0] in ['GELIR', 'GELİR']])
+    gider = sum([i[1] for i in tum_islemler if i[0] in ['GIDER', 'GİDER']])
     bakiye = gelir - gider
     
     k1, k2, k3 = st.columns(3)
